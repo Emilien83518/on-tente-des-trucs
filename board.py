@@ -69,12 +69,6 @@ class Board:
             # No piece at the starting position — nothing to move
             return False
 
-        valid_moves = piece.get_valid_moves(self.grid)
-
-        if to_pos not in valid_moves:
-            # The destination is not a legal move for this piece
-            return False
-
         # Place the piece on the destination square
         self.grid[to_row][to_col] = piece
 

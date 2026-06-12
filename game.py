@@ -7,16 +7,29 @@ from pieces.knight import Knight
 
 
 class Game:
-    # Manages the overall chess game — turns, check rules, castling, and pawn promotion
+    # Manages the overall chess game — turns, check, castling, promotion, en passant, and draw rules
 
     def __init__(self):
-        # Sets up a fresh game with a new board and gives the first turn to white
+        # Sets up a fresh game with all state variables initialized
         self.board = Board()
         self.current_turn = "white"
         self.game_over = False
         self.winner = None
-        self.status = ""           # Extra message e.g. "Check!" shown in the interface
-        self.pending_promotion = None  # Holds (row, col) of a pawn waiting to be promoted
+        self.status = ""                # Message shown in the interface e.g. "Check!"
+        self.pending_promotion = None   # (row, col) of a pawn waiting to be promoted
+
+        # En passant: stores the square a pawn just skipped over with a double step
+        # The opponent can capture on this square on their very next move only
+        self.en_passant_target = None
+
+        # 50-move rule: counts half-moves since the last pawn move or capture
+        # If it reaches 100 (= 50 full moves), the game is declared a draw
+        self.halfmove_clock = 0
+
+        # Threefold repetition: stores a snapshot of each position after every move
+        # If the same position appears 3 times, the game is a draw
+        self.position_history = []
+        self.position_history.append(self._board_snapshot())
 
     def switch_turn(self):
         # Switches the active player from white to black or vice versa
@@ -25,6 +38,7 @@ class Game:
     def opponent_of(self, color):
         # Returns the opposite color
         # color: "white" or "black"
+        # Returns: "black" or "white"
         return "black" if color == "white" else "white"
 
     def find_king(self, color, grid):
@@ -64,11 +78,12 @@ class Game:
         row, col = king_pos
         return self.is_square_attacked(row, col, self.opponent_of(color), grid)
 
-    def simulate_move(self, grid, from_pos, to_pos):
+    def simulate_move(self, grid, from_pos, to_pos, en_passant_target=None):
         # Returns a copy of the board with the move applied, without touching the real game
-        # Used to test whether a move would leave the king in check
+        # Also handles en passant captures in the simulation
         # from_pos: (row, col) of the piece to move
         # to_pos: (row, col) of the destination
+        # en_passant_target: the en passant square if active (may trigger pawn removal)
         new_grid = copy.deepcopy(grid)
         from_row, from_col = from_pos
         to_row, to_col = to_pos
@@ -77,48 +92,65 @@ class Game:
         new_grid[from_row][from_col] = None
         if piece is not None:
             piece.position = to_pos
+
+        # If this move is an en passant capture, remove the captured pawn from the board
+        if (piece is not None and piece.name == "Pawn"
+                and en_passant_target is not None
+                and to_pos == en_passant_target):
+            captured_row = from_row  # The captured pawn is on the same row as the capturing pawn
+            new_grid[captured_row][to_col] = None
+
         return new_grid
 
     def is_castling_move(self, piece, from_pos, to_pos):
         # Returns True if this move is a castling move (king moving 2 squares sideways)
-        # piece: the piece being moved
-        # from_pos: starting position
-        # to_pos: destination position
         if piece.name != "King":
             return False
         from_row, from_col = from_pos
         to_row, to_col = to_pos
         return from_row == to_row and abs(to_col - from_col) == 2
 
+    def is_en_passant_move(self, piece, to_pos):
+        # Returns True if this move is an en passant capture
+        # piece: the piece being moved (must be a pawn)
+        # to_pos: the destination square
+        return (piece.name == "Pawn"
+                and self.en_passant_target is not None
+                and to_pos == self.en_passant_target)
+
     def get_legal_moves(self, piece, from_pos, grid):
         # Returns only the truly legal moves for a piece —
-        # filtering out any move that leaves the king in check
-        # For castling, also ensures the king does not pass through check
+        # filtering out moves that leave the king in check
+        # Also adds en passant as a valid move when applicable
         # piece: the piece to get moves for
         # from_pos: (row, col) of that piece
         # grid: the current board state
         # Returns: list of (row, col) positions the piece can legally move to
-        raw_moves = piece.get_valid_moves(grid)
-        legal = []
+        raw_moves = list(piece.get_valid_moves(grid))
 
+        # Add en passant as a possible destination for pawns
+        if piece.name == "Pawn" and self.en_passant_target is not None:
+            from_row, from_col = from_pos
+            ep_row, ep_col = self.en_passant_target
+            direction = -1 if piece.color == "white" else 1
+            # The pawn can capture en passant if it is on the correct row and adjacent column
+            if from_row == ep_row - direction and abs(from_col - ep_col) == 1:
+                raw_moves.append(self.en_passant_target)
+
+        legal = []
         for to_pos in raw_moves:
             if self.is_castling_move(piece, from_pos, to_pos):
-                # For castling, the king must not be in check now,
-                # and must not pass through a square that is under attack
                 from_row, from_col = from_pos
                 to_row, to_col = to_pos
                 direction = 1 if to_col > from_col else -1
-                passing_col = from_col + direction  # The square the king passes through
-
+                passing_col = from_col + direction
                 opponent = self.opponent_of(piece.color)
-                currently_in_check = self.is_square_attacked(from_row, from_col, opponent, grid)
-                passes_through_check = self.is_square_attacked(from_row, passing_col, opponent, grid)
-                lands_in_check = self.is_square_attacked(to_row, to_col, opponent, grid)
-
-                if not currently_in_check and not passes_through_check and not lands_in_check:
+                if (not self.is_square_attacked(from_row, from_col, opponent, grid)
+                        and not self.is_square_attacked(from_row, passing_col, opponent, grid)
+                        and not self.is_square_attacked(to_row, to_col, opponent, grid)):
                     legal.append(to_pos)
             else:
-                simulated = self.simulate_move(grid, from_pos, to_pos)
+                simulated = self.simulate_move(grid, from_pos, to_pos, self.en_passant_target)
                 if not self.is_in_check(piece.color, simulated):
                     legal.append(to_pos)
 
@@ -138,14 +170,11 @@ class Game:
 
     def apply_castling(self, from_pos, to_pos):
         # Moves the rook to its correct square when the king castles
-        # Called after the king has already been moved
-        # from_pos: where the king started
-        # to_pos: where the king landed
+        # from_pos: where the king started, to_pos: where the king landed
         from_row, from_col = from_pos
         to_row, to_col = to_pos
-
         if to_col == 6:
-            # Kingside — rook goes from col 7 to col 5
+            # Kingside — rook moves from h-file (col 7) to f-file (col 5)
             rook = self.board.grid[from_row][7]
             self.board.grid[from_row][5] = rook
             self.board.grid[from_row][7] = None
@@ -153,7 +182,7 @@ class Game:
                 rook.position = (from_row, 5)
                 rook.has_moved = True
         elif to_col == 2:
-            # Queenside — rook goes from col 0 to col 3
+            # Queenside — rook moves from a-file (col 0) to d-file (col 3)
             rook = self.board.grid[from_row][0]
             self.board.grid[from_row][3] = rook
             self.board.grid[from_row][0] = None
@@ -163,8 +192,8 @@ class Game:
 
     def promote_pawn(self, row, col, choice):
         # Replaces a pawn that reached the last rank with the chosen piece
-        # row, col: position of the pawn to promote
-        # choice: one of "queen", "rook", "bishop", "knight"
+        # row, col: position of the pawn
+        # choice: "queen", "rook", "bishop", or "knight"
         color = self.board.grid[row][col].color
         pieces_map = {
             "queen":  Queen(color, (row, col)),
@@ -172,16 +201,46 @@ class Game:
             "bishop": Bishop(color, (row, col)),
             "knight": Knight(color, (row, col)),
         }
-        new_piece = pieces_map.get(choice, Queen(color, (row, col)))
-        self.board.grid[row][col] = new_piece
+        self.board.grid[row][col] = pieces_map.get(choice, Queen(color, (row, col)))
         self.pending_promotion = None
 
-        # After promotion, check game state for the opponent
+        # Record position and check game state after promotion
+        self.position_history.append(self._board_snapshot())
         self.switch_turn()
         self._check_game_state()
 
+    def _board_snapshot(self):
+        # Creates a compact string representation of the current board position
+        # Used to detect threefold repetition — if the same snapshot appears 3 times, it's a draw
+        # Returns: a string that uniquely identifies the current board state
+        snapshot = ""
+        for row in self.board.grid:
+            for piece in row:
+                if piece is None:
+                    snapshot += "."
+                else:
+                    # Use uppercase for white, lowercase for black, first letter of piece name
+                    letter = piece.name[0] if piece.name != "Knight" else "N"
+                    snapshot += letter.upper() if piece.color == "white" else letter.lower()
+        snapshot += self.current_turn[0]                            # Whose turn it is
+        snapshot += str(self.en_passant_target)                     # En passant availability
+        return snapshot
+
+    def _check_draw_rules(self):
+        # Checks the 50-move rule and threefold repetition
+        # Returns a draw message if either rule applies, or None if neither does
+        if self.halfmove_clock >= 100:
+            return "50-move rule — Draw!"
+
+        # Count how many times this exact position has appeared
+        current = self._board_snapshot()
+        if self.position_history.count(current) >= 3:
+            return "Threefold repetition — Draw!"
+
+        return None
+
     def _check_game_state(self):
-        # After each move, evaluates whether the next player is in check, checkmate, or stalemate
+        # Evaluates the game state after each move — check, checkmate, stalemate, or draw
         # Updates self.game_over, self.winner, and self.status accordingly
         opponent = self.current_turn
         in_check  = self.is_in_check(opponent, self.board.grid)
@@ -195,14 +254,20 @@ class Game:
             self.game_over = True
             self.winner = None
             self.status = "Stalemate — Draw!"
-        elif in_check:
-            self.status = "Check!"
         else:
-            self.status = ""
+            draw_reason = self._check_draw_rules()
+            if draw_reason:
+                self.game_over = True
+                self.winner = None
+                self.status = draw_reason
+            elif in_check:
+                self.status = "Check!"
+            else:
+                self.status = ""
 
     def parse_move(self, move_str):
         # Converts a move string like "e2 e4" into board coordinates
-        # move_str: "a1 b2" format — letter = column, number = row
+        # move_str: "a1 b2" — letter = column, number = row
         # Returns: ((from_row, from_col), (to_row, to_col)) or None if invalid
         try:
             parts = move_str.strip().lower().split()
@@ -220,9 +285,8 @@ class Game:
             return None
 
     def play_move(self, move_str):
-        # Tries to apply a move given as "e2 e4"
-        # Handles castling and triggers pawn promotion if needed
-        # Returns a message explaining the result
+        # Tries to apply a move, enforcing all chess rules
+        # Returns a message explaining what happened
         if self.pending_promotion:
             return "Please choose a piece to promote your pawn to first."
 
@@ -232,6 +296,7 @@ class Game:
 
         from_pos, to_pos = coords
         from_row, from_col = from_pos
+        to_row, to_col = to_pos
 
         piece = self.board.get_piece(from_row, from_col)
         if piece is None:
@@ -245,24 +310,44 @@ class Game:
                 return "You cannot move there — your king would be in check."
             return "Invalid move for that piece."
 
-        # Check if this is a castling move before applying it
-        castling = self.is_castling_move(piece, from_pos, to_pos)
+        castling    = self.is_castling_move(piece, from_pos, to_pos)
+        en_passant  = self.is_en_passant_move(piece, to_pos)
+        is_capture  = self.board.get_piece(to_row, to_col) is not None or en_passant
+        is_pawn_move = piece.name == "Pawn"
 
-        # Apply the move
+        # --- Update the 50-move clock before applying the move ---
+        if is_pawn_move or is_capture:
+            self.halfmove_clock = 0   # Reset on pawn move or capture
+        else:
+            self.halfmove_clock += 1  # Increment otherwise
+
+        # --- Apply the move ---
         self.board.move_piece(from_pos, to_pos)
 
-        # If the king castled, also move the rook
+        # Remove the captured pawn for en passant (it is NOT on the destination square)
+        if en_passant:
+            self.board.grid[from_row][to_col] = None
+
+        # Move the rook if the king castled
         if castling:
             self.apply_castling(from_pos, to_pos)
 
-        # Check if a pawn reached the last rank and needs promotion
-        to_row, to_col = to_pos
+        # --- Update the en passant target for the next move ---
+        if is_pawn_move and abs(to_row - from_row) == 2:
+            # Pawn just moved 2 squares — set the square it skipped as the en passant target
+            skipped_row = (from_row + to_row) // 2
+            self.en_passant_target = (skipped_row, to_col)
+        else:
+            self.en_passant_target = None  # En passant is only valid for one turn
+
+        # --- Check for pawn promotion ---
         moved_piece = self.board.get_piece(to_row, to_col)
         if moved_piece and moved_piece.name == "Pawn" and moved_piece.is_promotion():
             self.pending_promotion = (to_row, to_col)
             return "Pawn promotion! Choose a piece: queen, rook, bishop, or knight."
 
-        # Switch turn and evaluate game state
+        # --- Record the position and evaluate game state ---
+        self.position_history.append(self._board_snapshot())
         self.switch_turn()
         self._check_game_state()
 
