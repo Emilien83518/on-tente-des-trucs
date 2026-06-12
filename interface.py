@@ -99,6 +99,16 @@ class ChessInterface:
         self.btn_rematch = Button(WINDOW_SIZE // 2 - popup_btn_w - 20, 390, popup_btn_w, popup_btn_h, "Rematch")
         self.btn_menu    = Button(WINDOW_SIZE // 2 + 20,               390, popup_btn_w, popup_btn_h, "Menu")
 
+        # --- Promotion popup buttons (one per piece choice) ---
+        promo_w, promo_h = 120, 50
+        promo_y = 360
+        spacing = 130
+        start_x = WINDOW_SIZE // 2 - (2 * spacing) + 5
+        self.btn_promo_queen  = Button(start_x,               promo_y, promo_w, promo_h, "♕ Queen")
+        self.btn_promo_rook   = Button(start_x + spacing,     promo_y, promo_w, promo_h, "♖ Rook")
+        self.btn_promo_bishop = Button(start_x + spacing * 2, promo_y, promo_w, promo_h, "♗ Bishop")
+        self.btn_promo_knight = Button(start_x + spacing * 3, promo_y, promo_w, promo_h, "♘ Knight")
+
     def start_game(self):
         # Resets the game state and switches to the game screen
         self.game         = Game()
@@ -298,6 +308,47 @@ class ChessInterface:
             self.valid_moves  = []
 
     # -------------------------------------------------------------------------
+    # PROMOTION POPUP
+    # -------------------------------------------------------------------------
+
+    def draw_promotion_popup(self):
+        # Draws a popup asking the player which piece they want to promote their pawn to
+        overlay = pygame.Surface((WINDOW_SIZE, WINDOW_SIZE), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        self.screen.blit(overlay, (0, 0))
+
+        # Popup box
+        box_w, box_h = 560, 180
+        box_x = WINDOW_SIZE // 2 - box_w // 2
+        box_y = WINDOW_SIZE // 2 - box_h // 2 - 10
+        pygame.draw.rect(self.screen, (50, 50, 50), (box_x, box_y, box_w, box_h), border_radius=12)
+        pygame.draw.rect(self.screen, WHITE_COLOR,  (box_x, box_y, box_w, box_h), 2, border_radius=12)
+
+        # Title
+        title = self.button_font.render("Pawn Promotion! Choose a piece:", True, (255, 220, 50))
+        self.screen.blit(title, (WINDOW_SIZE // 2 - title.get_width() // 2, box_y + 20))
+
+        # The 4 piece buttons
+        mouse_pos = pygame.mouse.get_pos()
+        self.btn_promo_queen.draw(self.screen,  self.small_font, mouse_pos)
+        self.btn_promo_rook.draw(self.screen,   self.small_font, mouse_pos)
+        self.btn_promo_bishop.draw(self.screen, self.small_font, mouse_pos)
+        self.btn_promo_knight.draw(self.screen, self.small_font, mouse_pos)
+
+    def handle_promotion_click(self, mouse_pos):
+        # Handles the player's piece choice in the promotion popup
+        # mouse_pos: where the player clicked (x, y)
+        row, col = self.game.pending_promotion
+        if self.btn_promo_queen.is_clicked(mouse_pos):
+            self.game.promote_pawn(row, col, "queen")
+        elif self.btn_promo_rook.is_clicked(mouse_pos):
+            self.game.promote_pawn(row, col, "rook")
+        elif self.btn_promo_bishop.is_clicked(mouse_pos):
+            self.game.promote_pawn(row, col, "bishop")
+        elif self.btn_promo_knight.is_clicked(mouse_pos):
+            self.game.promote_pawn(row, col, "knight")
+
+    # -------------------------------------------------------------------------
     # WINNER POPUP
     # -------------------------------------------------------------------------
 
@@ -376,10 +427,13 @@ class ChessInterface:
 
                     elif self.screen_state == "game":
                         if self.game.game_over:
-                            # Game is over — clicks go to the popup buttons
+                            # Game is over — clicks go to the winner popup buttons
                             self.handle_popup_click(mouse_pos)
+                        elif self.game.pending_promotion:
+                            # A pawn reached the last rank — player must choose a piece
+                            self.handle_promotion_click(mouse_pos)
                         else:
-                            # Game is running — clicks go to the board
+                            # Normal play — clicks go to the board
                             self.handle_board_click(mouse_pos)
 
                 # Mouse wheel scrolling on the rules screen
@@ -399,7 +453,9 @@ class ChessInterface:
                 self.draw_coordinates()
                 self.draw_status_bar()
 
-                if self.game.game_over:
+                if self.game.pending_promotion:
+                    self.draw_promotion_popup()
+                elif self.game.game_over:
                     self.draw_winner_popup()
 
             pygame.display.flip()
